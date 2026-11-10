@@ -2,3 +2,4 @@ ultralytics # Включает: torch torchvision opencv-python matplotlib numpy
 supervision==0.22.0
 pandas
 opencv-python==4.10.0.84
+selenium
