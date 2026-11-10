@@ -1,12 +1,27 @@
+import os
 import numpy as np
 
+# Базовые директории
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+INPUT_DIR = os.path.join(DATA_DIR, "input")
+OUTPUT_DIR = os.path.join(DATA_DIR, "output")
+CAPTURED_DIR = os.path.join(OUTPUT_DIR, "captured")
+DETECTED_DIR = os.path.join(OUTPUT_DIR, "detected")
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+
+# Создаём директории при импорте конфига
+for _d in (INPUT_DIR, CAPTURED_DIR, DETECTED_DIR, MODELS_DIR):
+    os.makedirs(_d, exist_ok=True)
+
+
 # VIDEO_PATH = "video03.mp4"
-VIDEO_PATH = "selenium_video_11.mp4"
+VIDEO_PATH = os.path.join(INPUT_DIR, "selenium_video_11.mp4")
 
 
 ''' Детекция '''
-YOLO_MODEL_PATH = "yolov8s.pt" 
-OUTPUT_DETECTION_FILE = "output.mp4"
+YOLO_MODEL_PATH = os.path.join(MODELS_DIR, "yolov8s.pt")
+OUTPUT_DETECTION_FILE = os.path.join(DETECTED_DIR, "output.mp4")
 
 # Версии:
 # "yolov8n.pt" - nano (самая легкая)
@@ -17,7 +32,7 @@ OUTPUT_DETECTION_FILE = "output.mp4"
 
 
 ''' Сегментация '''
-SEGMENTATION_MODEL_PATH = "yolov8x-seg.pt"  # Сегментация
+SEGMENTATION_MODEL_PATH = os.path.join(MODELS_DIR, "yolov8x-seg.pt")  # Сегментация
 # Версии:
 # yolov8n-seg.pt 
 # yolov8s-seg.pt
@@ -32,7 +47,7 @@ SEGMENTATION_MODEL_PATH = "yolov8x-seg.pt"  # Сегментация
 # URL = "https://flussonic2.powernet.com.ru:444/user55644/embed.html?token=dont-panic-and-carry-a-towel&amp;autoplay=true&amp;play_duration=28800"
 URL = "https://flussonic2.powernet.com.ru:444/user55644/embed.html?token=dont-panic-and-carry-a-towel&autoplay=true&play_duration=28800"
 
-OUTPUT_FILE = "selenium_video.mp4"
+OUTPUT_FILE = os.path.join(CAPTURED_DIR, "selenium_video.mp4")
 
 
 ''' Разметка пешеходного перехода '''
