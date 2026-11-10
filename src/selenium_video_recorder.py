@@ -14,7 +14,7 @@ from config import URL, OUTPUT_FILE
 
 
 DURATION_SECONDS = 40
-FRAME_RATE = 10  # Частота кадров. Классно на 10.
+FRAME_RATE = 10  # Частота кадров. Рекомендуется 10.
 
 chrome_options = Options() # Настройки Selenium
 chrome_options.add_argument("--headless")  # Фоновый режим
