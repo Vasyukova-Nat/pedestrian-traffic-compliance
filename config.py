@@ -4,19 +4,16 @@ import numpy as np
 # Базовые директории
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-INPUT_DIR = os.path.join(DATA_DIR, "input")
-OUTPUT_DIR = os.path.join(DATA_DIR, "output")
-CAPTURED_DIR = os.path.join(OUTPUT_DIR, "captured")
-DETECTED_DIR = os.path.join(OUTPUT_DIR, "detected")
+CAPTURED_DIR = os.path.join(DATA_DIR, "captured")
+DETECTED_DIR = os.path.join(DATA_DIR, "detected")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 # Создаём директории при импорте конфига
-for _d in (INPUT_DIR, CAPTURED_DIR, DETECTED_DIR, MODELS_DIR):
+for _d in (CAPTURED_DIR, DETECTED_DIR, MODELS_DIR):
     os.makedirs(_d, exist_ok=True)
 
 
-# VIDEO_PATH = "video03.mp4"
-VIDEO_PATH = os.path.join(INPUT_DIR, "selenium_video_11.mp4")
+VIDEO_PATH = os.path.join(CAPTURED_DIR, "selenium_video_11.mp4")
 
 
 ''' Детекция '''
