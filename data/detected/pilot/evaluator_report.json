@@ -1,0 +1,44 @@
+{
+  "config": {
+    "conf": 0.2,
+    "iou": 0.7,
+    "imgsz": 640,
+    "classes": [
+      0
+    ],
+    "tracker": "bytetrack.yaml",
+    "gap_frames": 10,
+    "min_event_frames": 5
+  },
+  "checks": [
+    {
+      "name": "check_short_event",
+      "ok": false,
+      "error": ""
+    },
+    {
+      "name": "boundary_duration",
+      "ok": true,
+      "duration": 6
+    },
+    {
+      "name": "track_gap",
+      "ok": true,
+      "close_reason": "track_lost"
+    },
+    {
+      "name": "no_duplicate_notification",
+      "ok": true,
+      "notifications": 1
+    },
+    {
+      "name": "two_events_same_person",
+      "ok": true,
+      "events": 2
+    }
+  ],
+  "reference": {
+    "reference_events": 0,
+    "note": "эталон не задан"
+  }
+}

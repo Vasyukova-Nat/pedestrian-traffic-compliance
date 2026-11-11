@@ -1,0 +1,9 @@
+{
+  "frames": 201,
+  "source_fps": 20.0,
+  "latency_ms_mean": 127.7110890546667,
+  "latency_ms_p50": 120.15170000086073,
+  "latency_ms_p95": 244.0913999962504,
+  "latency_ms_max": 289.8438999982318,
+  "effective_fps": 7.830173616105883
+}
