@@ -13,7 +13,7 @@ for _d in (CAPTURED_DIR, DETECTED_DIR, MODELS_DIR):
     os.makedirs(_d, exist_ok=True)
 
 
-VIDEO_PATH = os.path.join(CAPTURED_DIR, "selenium_video_11.mp4")
+VIDEO_PATH = os.path.join(CAPTURED_DIR, "selenium_video_15.mp4")
 
 
 ''' Детекция '''
