@@ -56,7 +56,8 @@ python -m src.marking_and_detection
 pedestrian-crosswalk-detector/
 ├── data/
 │ ├── captured/                   # Захваченные видео с камеры
-│ └── detected/                   # Видео с результатами детекции
+│ ├── detected/                   # Видео с результатами детекции
+│ └── pilot/                      # Результаты пилота
 │
 ├── models/                       # Модели YOLO
 │ ├── yolov8s.pt                  # Модель детекции
