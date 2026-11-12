@@ -5,6 +5,10 @@ mmsegmentation/mmseg/
 *.pt
 *.mp4
 
+# Videos for demonstration
+!data/captured/selenium_video_11.mp4
+!data/captured/selenium_video_15.mp4
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
