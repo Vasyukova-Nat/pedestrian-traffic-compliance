@@ -55,21 +55,28 @@ python -m src.marking_and_detection
 ```
 pedestrian-crosswalk-detector/
 ├── data/
-│ ├── captured/          # Захваченные видео с камеры
-│ └── detected/          # Видео с результатами детекции
+│ ├── captured/                   # Захваченные видео с камеры
+│ └── detected/                   # Видео с результатами детекции
 │
-├── models/              # Модели YOLO
-│ ├── yolov8s.pt         # Модель детекции
-│ └── yolov8x-seg.pt     # Модель сегментации
+├── models/                       # Модели YOLO
+│ ├── yolov8s.pt                  # Модель детекции
+│ └── yolov8x-seg.pt              # Модель сегментации
 │
-├── resources/           # Скриншоты для README
+├── pilot/
+│ ├── config_pilot.py             # Параметры пилота
+│ ├── event_log.py                # Журнал событий
+│ ├── run_pilot.py                # Прогон пайплайна пилота
+│ ├── evaluator.py                # Оценщик
+│ └── README.md                   # Документация пилота
+│
+├── resources/                    # Скриншоты для README
 │
 ├── src/
 │ ├── selenium_video_recorder.py  # Захват видео через Selenium
 │ └── marking_and_detection.py    # Детекция, разметка перехода, логика нарушений
 │
-├── main.py              # Точка входа: пайплайн захват → детекция
-├── config.py            # Пути, URL камеры, координаты перехода
+├── main.py                       # Точка входа: пайплайн захват → детекция
+├── config.py                     # Пути, URL камеры, координаты перехода
 ├── requirements.txt
-└── README.md
+└── README.md                     # Документация проекта
 ```
