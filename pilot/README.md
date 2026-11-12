@@ -25,12 +25,6 @@ python pilot/evaluator.py     # проверки оценщика, отчёт
 - `pilot_annotated.mp4` — видео с разметкой и статусами
 - `evaluator_report.json` — проверки оценщика
 
-## Заполнить перед публикацией (факт)
-- модель CPU, число потоков (например, `lscpu | head`)
-- версии: `python --version`, `pip show ultralytics supervision opencv-python numpy`
-- фактические latency/p95 из `latency.json`
-- эталон `REFERENCE_EVENTS` для короткого размеченного фрагмента
-
 ## Проверки оценщика (синтетические трассы)
 - короткое событие (< MIN_EVENT_FRAMES) — не значимое
 - граничная длительность (= MIN_EVENT_FRAMES) — значимое
