@@ -2,7 +2,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import VIDEO_PATH, YOLO_MODEL_PATH, crosswalk_coordinates, DETECTED_DIR
+from config import VIDEO_PATH, YOLO_MODEL_PATH, crosswalk_coordinates, DATA_DIR
 
 # ----- Фактические параметры пилота -----
 # Единый порог уверенности для всех прогонов
@@ -26,7 +26,7 @@ MODEL_PATH = YOLO_MODEL_PATH
 CROSSWALK = crosswalk_coordinates
 
 # Куда пишем артефакты пилота
-PILOT_DIR = os.path.join(DETECTED_DIR, "pilot")
+PILOT_DIR = os.path.join(DATA_DIR, "pilot")
 FRAMES_CSV = os.path.join(PILOT_DIR, "frames.csv")
 EVENTS_CSV = os.path.join(PILOT_DIR, "events.csv")
 LATENCY_JSON = os.path.join(PILOT_DIR, "latency.json")
