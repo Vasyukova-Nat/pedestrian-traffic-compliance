@@ -1,5 +1,5 @@
 track_id,start_frame,end_frame,duration,close_reason
-1,7,24,12,track_lost
+1,8,24,11,track_lost
 2,51,91,37,track_lost
-7,131,163,21,track_lost
-7,178,182,5,track_lost
+3,146,163,10,track_lost
+3,178,182,5,track_lost

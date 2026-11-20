@@ -1,9 +1,34 @@
 {
-  "frames": 201,
   "source_fps": 20.0,
-  "latency_ms_mean": 102.27941193696648,
-  "latency_ms_p50": 99.22530001495034,
-  "latency_ms_p95": 117.41830001119524,
-  "latency_ms_max": 258.2149999216199,
-  "effective_fps": 9.777138732634555
+  "tracker_frame_rate": 20,
+  "torch_num_threads": 8,
+  "detector_ms": {
+    "frames": 201,
+    "mean": 101.25062537358713,
+    "p50": 98.53740001562983,
+    "p95": 117.044199956581,
+    "max": 175.89189996942878
+  },
+  "model_plus_tracker_ms": {
+    "frames": 201,
+    "mean": 102.3657099455039,
+    "p50": 99.89079996012151,
+    "p95": 117.4405999481678,
+    "max": 177.43320006411523
+  },
+  "notify_ms": {
+    "frames": 201,
+    "mean": 102.50164576822345,
+    "p50": 100.01139994710684,
+    "p95": 117.52119997981936,
+    "max": 177.59960005059838
+  },
+  "effective_fps_model_plus_tracker": 9.768896249851311,
+  "stage_counts": {
+    "after_conf": 232,
+    "after_nms": 232,
+    "after_tracker": 142,
+    "assoc_candidates": 232
+  },
+  "note": "сокращённая ветвь: единый conf, без размерного фильтра; stage_counts — суммарные числа кандидатов по этапам"
 }
