@@ -12,19 +12,34 @@
   },
   "checks": [
     {
-      "name": "check_short_event",
-      "ok": false,
-      "error": ""
+      "name": "short_event",
+      "ok": true,
+      "duration": 3,
+      "opens": 0
     },
     {
       "name": "boundary_duration",
       "ok": true,
-      "duration": 6
+      "duration": 5,
+      "interval": [
+        1,
+        5
+      ],
+      "opens": 1
+    },
+    {
+      "name": "boundary_plus_minus_one",
+      "ok": true,
+      "durations": [
+        4,
+        6
+      ]
     },
     {
       "name": "track_gap",
       "ok": true,
-      "close_reason": "track_lost"
+      "close_reason": "track_lost",
+      "duration": 3
     },
     {
       "name": "no_duplicate_notification",
@@ -34,7 +49,8 @@
     {
       "name": "two_events_same_person",
       "ok": true,
-      "events": 2
+      "events": 2,
+      "opens": 2
     }
   ],
   "reference": {
