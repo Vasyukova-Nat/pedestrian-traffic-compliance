@@ -76,6 +76,12 @@
       "name": "duration_filter",
       "ok": true,
       "filtered_out": 1
+    },
+    {
+      "name": "stats_bootstrap_example",
+      "ok": true,
+      "n_blocks_used": 2,
+      "conditional": false
     }
   ],
   "reference": {
