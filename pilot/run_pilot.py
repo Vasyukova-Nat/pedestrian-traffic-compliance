@@ -1,9 +1,14 @@
 """Прогон калибровочной камеры через детекцию+трекинг+логику событий.
 
-Две сопоставимые выгрузки: conf=0.5 (baseline) и conf=0.2 (proposed).
-Остальные настройки одинаковы (iou, imgsz, classes, трекер).
-Пишет для каждого тега: frames_<tag>.csv, events_<tag>.csv,
-notifications_<tag>.csv, latency_<tag>.json, pilot_annotated_<tag>.mp4.
+Сокращённая ветвь: единый conf (без размерно-зависимого фильтра).
+Две сопоставимые выгрузки: conf=0.5 (baseline) и conf=0.2 (proposed);
+остальные настройки одинаковы. ByteTrack создаётся с явными численными
+параметрами и фактическим frame_rate. Замеряются раздельно:
+  - detector_ms: только инференс YOLO;
+  - model_plus_tracker_ms: модель + обновление трекера;
+  - notify_ms: полное формирование события/уведомления на кадре.
+Счётчики кандидатов по этапам: после conf, после NMS (детектор),
+после трекера, число детекций-кандидатов в ассоциации.
 """
 
 import csv
@@ -16,15 +21,28 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cv2
 import numpy as np
+import torch
 import supervision as sv
 from ultralytics import YOLO
 
 from pilot import config_pilot as P
 from pilot.event_log import EventLog
 
+torch.set_num_threads(P.TORCH_NUM_THREADS)
+
 
 def is_in_crosswalk(point):
     return cv2.pointPolygonTest(P.CROSSWALK, point, False) >= 0
+
+
+def _make_tracker(frame_rate):
+    return sv.ByteTrack(
+        track_activation_threshold=P.TRACK_ACTIVATION_THRESHOLD,
+        minimum_matching_threshold=P.MINIMUM_MATCHING_THRESHOLD,
+        minimum_consecutive_frames=P.MINIMUM_CONSECUTIVE_FRAMES,
+        lost_track_buffer=P.LOST_TRACK_BUFFER,
+        frame_rate=frame_rate,
+    )
 
 
 def run_one(tag, conf):
@@ -37,13 +55,16 @@ def run_one(tag, conf):
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    frame_rate = int(round(fps))
 
     out = cv2.VideoWriter(paths["annotated"], cv2.VideoWriter_fourcc(*"mp4v"),
                           fps, (w, h))
 
-    tracker = sv.ByteTrack()
+    tracker = _make_tracker(frame_rate)
     event_log = EventLog(P.GAP_FRAMES, P.MIN_EVENT_FRAMES)
-    latencies = []
+    det_ms, mt_ms, ntf_ms = [], [], []
+    stage_counts = {"after_conf": 0, "after_nms": 0,
+                    "after_tracker": 0, "assoc_candidates": 0}
 
     with open(paths["frames"], "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -59,9 +80,18 @@ def run_one(tag, conf):
             t0 = time.perf_counter()
             results = model(frame, conf=conf, iou=P.IOU, imgsz=P.IMGSZ,
                             classes=P.CLASSES, verbose=False)
+            t1 = time.perf_counter()
+            # после conf и NMS (NMS уже выполнен внутри model)
+            n_after = len(results[0].boxes)
+            stage_counts["after_conf"] += n_after
+            stage_counts["after_nms"] += n_after
+
             detections = sv.Detections.from_ultralytics(results[0])
+            stage_counts["assoc_candidates"] += len(detections)
             detections = tracker.update_with_detections(detections)
+            t2 = time.perf_counter()
             detections = detections[np.isin(detections.class_id, P.CLASSES)]
+            stage_counts["after_tracker"] += len(detections)
 
             frame_rows = []
             for det in detections:
@@ -76,14 +106,14 @@ def run_one(tag, conf):
                 frame_rows.append((int(track_id), (cx, cy), in_cw,
                                    xyxy, conf_val))
 
-            latency_ms = (time.perf_counter() - t0) * 1000.0
-            latencies.append(latency_ms)
-
-            # логика событий
             event_log.update(frame_idx,
                              [(t, c, in_cw) for t, c, in_cw, _, _ in frame_rows])
+            t3 = time.perf_counter()
 
-            # артефакты кадра
+            det_ms.append((t1 - t0) * 1000.0)
+            mt_ms.append((t2 - t0) * 1000.0)
+            ntf_ms.append((t3 - t0) * 1000.0)
+
             for track_id, (cx, cy), in_cw, xyxy, conf_val in frame_rows:
                 writer.writerow([frame_idx, track_id,
                                  f"{xyxy[0]:.1f}", f"{xyxy[1]:.1f}",
@@ -91,9 +121,7 @@ def run_one(tag, conf):
                                  f"{cx:.1f}", f"{cy:.1f}",
                                  int(in_cw), f"{conf_val:.4f}"])
 
-            # аннотация
-            annotated = _annotate(frame, frame_rows, event_log)
-            out.write(annotated)
+            out.write(_annotate(frame, frame_rows, event_log))
             frame_idx += 1
 
     cap.release()
@@ -101,7 +129,7 @@ def run_one(tag, conf):
 
     event_log.finalize(frame_idx - 1)
     _write_events(event_log, paths)
-    _write_latency(latencies, fps, paths)
+    _write_latency(det_ms, mt_ms, ntf_ms, fps, frame_rate, stage_counts, paths)
 
     print(f"[{tag}] conf={conf}: кадров {frame_idx}, "
           f"событий {len(event_log.events)}, "
@@ -151,16 +179,29 @@ def _write_events(event_log, paths):
             writer.writerow(row)
 
 
-def _write_latency(latencies, fps, paths):
-    arr = np.array(latencies)
+def _write_latency(det_ms, mt_ms, ntf_ms, fps, frame_rate, stage_counts, paths):
+    def stats(arr):
+        a = np.array(arr)
+        return {
+            "frames": int(a.size),
+            "mean": float(a.mean()) if a.size else None,
+            "p50": float(np.percentile(a, 50)) if a.size else None,
+            "p95": float(np.percentile(a, 95)) if a.size else None,
+            "max": float(a.max()) if a.size else None,
+        }
     payload = {
-        "frames": int(arr.size),
         "source_fps": float(fps),
-        "latency_ms_mean": float(arr.mean()) if arr.size else None,
-        "latency_ms_p50": float(np.percentile(arr, 50)) if arr.size else None,
-        "latency_ms_p95": float(np.percentile(arr, 95)) if arr.size else None,
-        "latency_ms_max": float(arr.max()) if arr.size else None,
-        "effective_fps": float(1000.0 / arr.mean()) if arr.size and arr.mean() else None,
+        "tracker_frame_rate": int(frame_rate),
+        "torch_num_threads": P.TORCH_NUM_THREADS,
+        "detector_ms": stats(det_ms),
+        "model_plus_tracker_ms": stats(mt_ms),
+        "notify_ms": stats(ntf_ms),
+        "effective_fps_model_plus_tracker": (
+            float(1000.0 / np.mean(mt_ms)) if mt_ms and np.mean(mt_ms) else None
+        ),
+        "stage_counts": stage_counts,
+        "note": "сокращённая ветвь: единый conf, без размерного фильтра; "
+                "stage_counts — суммарные числа кандидатов по этапам",
     }
     with open(paths["latency"], "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
