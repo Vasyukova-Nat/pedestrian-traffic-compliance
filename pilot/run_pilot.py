@@ -1,7 +1,9 @@
 """Прогон калибровочной камеры через детекцию+трекинг+логику событий.
 
-Фиксированные параметры: conf=0.2, iou, imgsz, classes=[0], один трекер.
-Пишет: frames.csv, events.csv, latency.json, pilot_annotated.mp4.
+Две сопоставимые выгрузки: conf=0.5 (baseline) и conf=0.2 (proposed).
+Остальные настройки одинаковы (iou, imgsz, classes, трекер).
+Пишет для каждого тега: frames_<tag>.csv, events_<tag>.csv,
+notifications_<tag>.csv, latency_<tag>.json, pilot_annotated_<tag>.mp4.
 """
 
 import csv
@@ -17,7 +19,6 @@ import numpy as np
 import supervision as sv
 from ultralytics import YOLO
 
-from config import YOLO_MODEL_PATH
 from pilot import config_pilot as P
 from pilot.event_log import EventLog
 
@@ -26,7 +27,8 @@ def is_in_crosswalk(point):
     return cv2.pointPolygonTest(P.CROSSWALK, point, False) >= 0
 
 
-def run():
+def run_one(tag, conf):
+    paths = P.run_paths(tag)
     model = YOLO(P.MODEL_PATH)
     cap = cv2.VideoCapture(P.SOURCE_VIDEO)
     if not cap.isOpened():
@@ -36,14 +38,14 @@ def run():
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
 
-    out = cv2.VideoWriter(P.ANNOTATED_VIDEO, cv2.VideoWriter_fourcc(*"mp4v"),
+    out = cv2.VideoWriter(paths["annotated"], cv2.VideoWriter_fourcc(*"mp4v"),
                           fps, (w, h))
 
     tracker = sv.ByteTrack()
     event_log = EventLog(P.GAP_FRAMES, P.MIN_EVENT_FRAMES)
     latencies = []
 
-    with open(P.FRAMES_CSV, "w", newline="", encoding="utf-8") as f:
+    with open(paths["frames"], "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["frame", "track_id", "x1", "y1", "x2", "y2",
                          "cx", "cy", "in_crosswalk", "conf"])
@@ -55,7 +57,7 @@ def run():
                 break
 
             t0 = time.perf_counter()
-            results = model(frame, conf=P.CONF, iou=P.IOU, imgsz=P.IMGSZ,
+            results = model(frame, conf=conf, iou=P.IOU, imgsz=P.IMGSZ,
                             classes=P.CLASSES, verbose=False)
             detections = sv.Detections.from_ultralytics(results[0])
             detections = tracker.update_with_detections(detections)
@@ -65,14 +67,14 @@ def run():
             for det in detections:
                 xyxy = det[0]
                 track_id = det[4]
-                conf = det[2]
+                conf_val = det[2]
                 if track_id is None:
                     continue
                 cx = (xyxy[0] + xyxy[2]) / 2
                 cy = (xyxy[1] + xyxy[3]) / 2
                 in_cw = is_in_crosswalk((cx, cy))
                 frame_rows.append((int(track_id), (cx, cy), in_cw,
-                                   xyxy, conf))
+                                   xyxy, conf_val))
 
             latency_ms = (time.perf_counter() - t0) * 1000.0
             latencies.append(latency_ms)
@@ -82,12 +84,12 @@ def run():
                              [(t, c, in_cw) for t, c, in_cw, _, _ in frame_rows])
 
             # артефакты кадра
-            for track_id, (cx, cy), in_cw, xyxy, conf in frame_rows:
+            for track_id, (cx, cy), in_cw, xyxy, conf_val in frame_rows:
                 writer.writerow([frame_idx, track_id,
                                  f"{xyxy[0]:.1f}", f"{xyxy[1]:.1f}",
                                  f"{xyxy[2]:.1f}", f"{xyxy[3]:.1f}",
                                  f"{cx:.1f}", f"{cy:.1f}",
-                                 int(in_cw), f"{conf:.4f}"])
+                                 int(in_cw), f"{conf_val:.4f}"])
 
             # аннотация
             annotated = _annotate(frame, frame_rows, event_log)
@@ -98,12 +100,18 @@ def run():
     out.release()
 
     event_log.finalize(frame_idx - 1)
-    _write_events(event_log)
-    _write_latency(latencies, fps)
+    _write_events(event_log, paths)
+    _write_latency(latencies, fps, paths)
 
-    print(f"Кадров: {frame_idx}, событий: {len(event_log.events)}, "
-          f"значимых: {len(event_log.significant_events())}")
-    print(f"Артефакты: {P.PILOT_DIR}")
+    print(f"[{tag}] conf={conf}: кадров {frame_idx}, "
+          f"событий {len(event_log.events)}, "
+          f"значимых {len(event_log.significant_events())}")
+    print(f"[{tag}] артефакты: {paths['dir']}")
+
+
+def run():
+    for tag, spec in P.RUNS.items():
+        run_one(tag, spec["conf"])
 
 
 def _annotate(frame, frame_rows, event_log):
@@ -112,7 +120,7 @@ def _annotate(frame, frame_rows, event_log):
     cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
     cv2.polylines(frame, [P.CROSSWALK], True, (0, 200, 255), 2)
 
-    for track_id, (cx, cy), in_cw, xyxy, conf in frame_rows:
+    for track_id, (cx, cy), in_cw, xyxy, conf_val in frame_rows:
         color = (0, 0, 255) if not in_cw else (0, 255, 0)
         cv2.rectangle(frame, (int(xyxy[0]), int(xyxy[1])),
                       (int(xyxy[2]), int(xyxy[3])), color, 2)
@@ -125,8 +133,8 @@ def _annotate(frame, frame_rows, event_log):
     return frame
 
 
-def _write_events(event_log):
-    with open(P.EVENTS_CSV, "w", newline="", encoding="utf-8") as f:
+def _write_events(event_log, paths):
+    with open(paths["events"], "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["track_id", "start_frame", "end_frame",
                          "duration", "close_reason"])
@@ -135,7 +143,7 @@ def _write_events(event_log):
             writer.writerow([d["track_id"], d["start_frame"], d["end_frame"],
                              d["duration"], d["close_reason"]])
 
-    with open(os.path.join(P.PILOT_DIR, "notifications.csv"), "w",
+    with open(paths["notifications"], "w",
               newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["frame", "track_id", "kind"])
@@ -143,7 +151,7 @@ def _write_events(event_log):
             writer.writerow(row)
 
 
-def _write_latency(latencies, fps):
+def _write_latency(latencies, fps, paths):
     arr = np.array(latencies)
     payload = {
         "frames": int(arr.size),
@@ -154,7 +162,7 @@ def _write_latency(latencies, fps):
         "latency_ms_max": float(arr.max()) if arr.size else None,
         "effective_fps": float(1000.0 / arr.mean()) if arr.size and arr.mean() else None,
     }
-    with open(P.LATENCY_JSON, "w", encoding="utf-8") as f:
+    with open(paths["latency"], "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 

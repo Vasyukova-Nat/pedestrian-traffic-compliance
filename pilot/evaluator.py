@@ -4,8 +4,10 @@
 и интервалы кадров пересекаются (IoU по интервалам > 0).
 
 Проверки на синтетических трассах (in-memory):
-  - короткое событие (короче MIN_EVENT_FRAMES) не считается значимым;
-  - граничная длительность (ровно MIN_EVENT_FRAMES) считается значимой;
+  - короткое событие (короче MIN_EVENT_FRAMES) не считается значимым
+    и не порождает event_open;
+  - граничная длительность (ровно MIN_EVENT_FRAMES) считается значимой
+    и порождает ровно одно event_open;
   - разрыв трека закрывает событие с reason="track_lost";
   - повторное уведомление не появляется, пока событие открыто;
   - два события одного человека (ушёл → вернулся → ушёл).
@@ -66,21 +68,56 @@ def run_event_log(trace, gap_frames, min_frames):
     return log
 
 
+def _opens(log, track_id=None):
+    return [n for n in log.notifications
+            if n[2] == "event_open" and (track_id is None or n[1] == track_id)]
+
+
 def check_short_event():
-    # событие длиной 3 кадра при MIN_EVENT_FRAMES=5
+    # событие длиной 3 кадра при MIN_EVENT_FRAMES=5: не значимое, нет event_open
     spec = [(1, True)] + [(1, False)] * 3 + [(1, True)]
     log = run_event_log(_trace(spec), gap_frames=100, min_frames=5)
-    assert len(log.events) == 1 and log.events[0].duration == 3
+    assert len(log.events) == 1 and log.events[0].duration == 3, \
+        f"duration={log.events[0].duration if log.events else None}"
     assert log.significant_events() == []
-    return {"name": "short_event", "ok": True, "duration": log.events[0].duration}
+    assert _opens(log) == [], f"неожиданный event_open: {_opens(log)}"
+    return {"name": "short_event", "ok": True,
+            "duration": log.events[0].duration, "opens": 0}
 
 
 def check_boundary_duration():
+    # ровно 5 внешних кадров при MIN_EVENT_FRAMES=5: значимое, ровно 1 event_open
     spec = [(1, True)] + [(1, False)] * 5 + [(1, True)]
     log = run_event_log(_trace(spec), gap_frames=100, min_frames=5)
+    ev = log.events[0]
+    assert ev.duration == 5, f"duration={ev.duration}"
+    # кадр возврата в ROI не входит: end_frame — последний внешний кадр
+    assert ev.start_frame == 1 and ev.end_frame == 5, \
+        f"interval=({ev.start_frame},{ev.end_frame})"
     assert len(log.significant_events()) == 1
+    assert len(_opens(log)) == 1, f"opens={_opens(log)}"
     return {"name": "boundary_duration", "ok": True,
-            "duration": log.events[0].duration}
+            "duration": ev.duration,
+            "interval": [ev.start_frame, ev.end_frame],
+            "opens": 1}
+
+
+def check_boundary_plus_minus_one():
+    # 4 внешних кадра: не значимое и без event_open
+    spec4 = [(1, True)] + [(1, False)] * 4 + [(1, True)]
+    log4 = run_event_log(_trace(spec4), gap_frames=100, min_frames=5)
+    assert log4.events[0].duration == 4
+    assert log4.significant_events() == []
+    assert _opens(log4) == []
+
+    # 6 внешних кадров: значимое, ровно 1 event_open
+    spec6 = [(1, True)] + [(1, False)] * 6 + [(1, True)]
+    log6 = run_event_log(_trace(spec6), gap_frames=100, min_frames=5)
+    assert log6.events[0].duration == 6
+    assert len(log6.significant_events()) == 1
+    assert len(_opens(log6)) == 1
+    return {"name": "boundary_plus_minus_one", "ok": True,
+            "durations": [log4.events[0].duration, log6.events[0].duration]}
 
 
 def check_track_gap():
@@ -99,13 +136,19 @@ def check_track_gap():
     log.finalize(len(spec) - 1)
     lost = [e for e in log.events if e.close_reason == "track_lost"]
     assert len(lost) == 1
-    return {"name": "track_gap", "ok": True, "close_reason": lost[0].close_reason}
+    # пропуски не входят в длительность: длительность = 3 внешних кадра,
+    # end_frame — последний кадр наблюдения вне ROI, а не конец разрыва
+    ev = lost[0]
+    assert ev.duration == 3, f"duration={ev.duration}"
+    assert ev.end_frame == 3, f"end_frame={ev.end_frame}"
+    return {"name": "track_gap", "ok": True,
+            "close_reason": ev.close_reason, "duration": ev.duration}
 
 
 def check_no_duplicate_notification():
     spec = [(1, True)] + [(1, False)] * 10 + [(1, True)]
     log = run_event_log(_trace(spec), gap_frames=100, min_frames=1)
-    opens = [n for n in log.notifications if n[1] == 1]
+    opens = _opens(log, 1)
     assert len(opens) == 1, f"ожидалось 1 уведомление, получено {len(opens)}"
     return {"name": "no_duplicate_notification", "ok": True,
             "notifications": len(opens)}
@@ -117,13 +160,15 @@ def check_two_events_same_person():
     log = run_event_log(_trace(spec), gap_frames=100, min_frames=1)
     same = [e for e in log.events if e.track_id == 1]
     assert len(same) == 2, f"ожидалось 2 события, получено {len(same)}"
+    assert len(_opens(log, 1)) == 2
     return {"name": "two_events_same_person", "ok": True,
-            "events": len(same)}
+            "events": len(same), "opens": 2}
 
 
 def run_checks():
     results = []
-    for fn in (check_short_event, check_boundary_duration, check_track_gap,
+    for fn in (check_short_event, check_boundary_duration,
+               check_boundary_plus_minus_one, check_track_gap,
                check_no_duplicate_notification, check_two_events_same_person):
         try:
             results.append(fn())
