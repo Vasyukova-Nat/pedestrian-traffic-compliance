@@ -1,0 +1,6 @@
+track_id,start_frame,end_frame,duration,close_reason
+9,7,36,28,track_lost
+10,51,92,42,track_lost
+12,105,145,33,track_lost
+15,129,164,29,track_lost
+15,178,195,7,end_of_video

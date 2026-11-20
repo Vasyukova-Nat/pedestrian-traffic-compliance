@@ -1,0 +1,11 @@
+frame,track_id,kind
+7,9,event_candidate
+11,9,event_open
+51,10,event_candidate
+55,10,event_open
+105,12,event_candidate
+110,12,event_open
+129,15,event_candidate
+133,15,event_open
+178,15,event_candidate
+182,15,event_open
