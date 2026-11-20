@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pilot import config_pilot as P
 from pilot.event_log import EventLog
+from pilot.stats_bootstrap import _check_example_runs
 
 
 # ---------- Назначение ----------
@@ -437,7 +438,7 @@ def run_checks():
                check_no_duplicate_notification, check_two_events_same_person,
                check_competing_assignment, check_identical_duplicates,
                check_short_overlap, check_unmatched_notification,
-               check_duration_filter):
+               check_duration_filter, _check_example_runs):
         try:
             results.append(fn())
         except AssertionError as e:
