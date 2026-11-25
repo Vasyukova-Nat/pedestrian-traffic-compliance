@@ -201,12 +201,13 @@ def _check_conditional_achievable():
 def _check_mixed_empty_nonempty():
     # Смесь пустых и непустых блоков: точечная оценка определена,
     # хотя отдельные доли могут быть неопределены.
+    # Полный пул: recall_a = 3/(3+1) = 0.75, recall_b = 2/(2+2) = 0.5,
+    # разность = point_b - point_a = 0.5 - 0.75 = -0.25.
     ba = [{"tp": 0, "fp": 0, "fn": 0}, {"tp": 3, "fp": 1, "fn": 1}]
     bb = [{"tp": 0, "fp": 0, "fn": 0}, {"tp": 2, "fp": 1, "fn": 2}]
     res = paired_block_bootstrap(ba, bb, "recall", n_boot=100, seed=0)
     assert res["status"] == "ok"
-    # точка по полному пулу: 3/5 vs 2/5 => -0.2
-    assert abs(res["point"] - (-0.2)) < 1e-9, res["point"]
+    assert abs(res["point"] - (-0.25)) < 1e-9, res["point"]
     return {"name": "mixed_empty_nonempty", "ok": True, "point": res["point"]}
 
 

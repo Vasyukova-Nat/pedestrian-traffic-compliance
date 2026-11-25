@@ -480,57 +480,42 @@ def check_tie_by_row_id():
 
 def check_competing_assignment():
     # Замечание 4: реально создать случай «первое -> A и B, второе -> только A».
-    # Через пространственные рамки: p1 совпадает с рамками A и B,
-    # p2 — только с A.
+    # p1 совпадает с A на всех 10 кадрах и с B на 5/10 (допустим к обоим).
+    # p2 совпадает с A на всех 10 кадрах и с B на 0/10 (только к A).
     p1 = _pred("p1", 10, 0, 9)
     p2 = _pred("p2", 20, 0, 9)
     A = _ref("A", 1, 0, 9)
     B = _ref("B", 2, 0, 9)
+
+    box = (0.0, 0.0, 10.0, 10.0)
+    far = (100.0, 100.0, 110.0, 110.0)
+
     pred_boxes = {
-        "p1": _boxes(range(0, 10)),
-        "p2": _boxes(range(0, 10)),
+        "p1": {f: box for f in range(0, 10)},
+        "p2": {f: box for f in range(0, 10)},
     }
     ref_boxes = {
-        "A": _boxes(range(0, 10)),          # p1 и p2 совпадают с A
-        "B": {f: (100.0, 100.0, 110.0, 110.0) for f in range(0, 10)},
+        # A совпадает с рамками p1 и p2 на всех кадрах
+        "A": {f: box for f in range(0, 10)},
+        # B совпадает с p1 на кадрах 0..4 (5/10) и далёк на 5..9;
+        # с p2 не совпадает ни на одном кадре (0/10)
+        "B": {f: (box if f < 5 else far) for f in range(0, 10)},
     }
-    # p1 получает "смешанные" рамки: совпадает и с A, и с B нельзя одной
-    # рамкой, поэтому сделаем p1 совместимым с B через пересечение по
-    # половине кадров (IoU>=0.5 на 5 из 10), а с A — на всех 10.
-    pred_boxes["p1"] = {**{f: (0.0, 0.0, 10.0, 10.0) for f in range(0, 10)}}
-    # чтобы p1 был допустим к B (5/10), зададим B-рамку совпадающей
-    # на кадрах 0..4 и далёкой на 5..9
-    ref_boxes["B"] = {}
-    for f in range(0, 10):
-        ref_boxes["B"][f] = ((0.0, 0.0, 10.0, 10.0) if f < 5
-                             else (100.0, 100.0, 110.0, 110.0))
-    # p2 к B недопустим: его рамка совпадает с A, а с B — нет.
-    pred_boxes["p2"] = {f: (100.0, 100.0, 110.0, 110.0)
-                        for f in range(0, 10)}
-    # p2 совпадает с B на всех кадрах, но не с A -> нужно наоборот:
-    # вернём p2 к A и разведём с B
-    pred_boxes["p2"] = {f: (0.0, 0.0, 10.0, 10.0) for f in range(0, 10)}
-    # тогда p2 допустим и к A, и к B — это не заявленный случай.
-    # Сделаем B далёким от обеих рамок p1/p2 нельзя при p1 допустимом к B.
-    # Итог: корректная постановка — p1 допустим к A и B (5/10 к B),
-    # p2 — только к A (0/10 к B). Зададим p2 рамку, не совпадающую с B.
-    pred_boxes["p2"] = {f: (0.0, 0.0, 10.0, 10.0) for f in range(0, 10)}
-    ref_boxes["B"] = {f: ((100.0, 100.0, 110.0, 110.0) if f < 5
-                          else (0.0, 0.0, 10.0, 10.0))
-                      for f in range(0, 10)}
-    # Проверим допустимость явно
+
     ok_p1_A = pair_admissible(p1, A, pred_boxes["p1"], ref_boxes["A"])[0]
     ok_p1_B = pair_admissible(p1, B, pred_boxes["p1"], ref_boxes["B"])[0]
     ok_p2_A = pair_admissible(p2, A, pred_boxes["p2"], ref_boxes["A"])[0]
     ok_p2_B = pair_admissible(p2, B, pred_boxes["p2"], ref_boxes["B"])[0]
     assert ok_p1_A and ok_p1_B, (ok_p1_A, ok_p1_B)
     assert ok_p2_A and not ok_p2_B, (ok_p2_A, ok_p2_B)
+
     cls = classify([p1, p2], [A, B], pred_boxes, ref_boxes)
     # корректно: P2->A, P1->B => TP=2, FP=0, FN=0
     assigned = {(t["pred"]["row_id"], t["ref"]["row_id"]) for t in cls["tp"]}
     assert assigned == {("p2", "A"), ("p1", "B")}, assigned
     assert cls["fp"] == [] and cls["fn"] == []
-    return {"name": "competing_assignment", "ok": True, "assigned": sorted(assigned)}
+    return {"name": "competing_assignment", "ok": True,
+            "assigned": sorted(assigned)}
 
 
 def check_identical_duplicates():
