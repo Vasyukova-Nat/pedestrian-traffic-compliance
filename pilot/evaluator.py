@@ -479,29 +479,32 @@ def check_tie_by_row_id():
 
 
 def check_competing_assignment():
-    # Замечание 4: реально создать случай «первое -> A и B, второе -> только A».
+    # Замечание 4: случай «первое -> A и B, второе -> только A».
     # p1 совпадает с A на всех 10 кадрах и с B на 5/10 (допустим к обоим).
     # p2 совпадает с A на всех 10 кадрах и с B на 0/10 (только к A).
+    # Ключевое: рамки p1 и p2 РАЗНЫЕ, чтобы B совпадал с p1, но не с p2.
     p1 = _pred("p1", 10, 0, 9)
     p2 = _pred("p2", 20, 0, 9)
     A = _ref("A", 1, 0, 9)
     B = _ref("B", 2, 0, 9)
 
-    box = (0.0, 0.0, 10.0, 10.0)
+    box_p1 = (0.0, 0.0, 10.0, 10.0)      # рамка p1
+    box_p2 = (50.0, 50.0, 60.0, 60.0)    # рамка p2 (не пересекается с p1)
     far = (100.0, 100.0, 110.0, 110.0)
 
     pred_boxes = {
-        "p1": {f: box for f in range(0, 10)},
-        "p2": {f: box for f in range(0, 10)},
+        "p1": {f: box_p1 for f in range(0, 10)},
+        "p2": {f: box_p2 for f in range(0, 10)},
     }
     ref_boxes = {
-        # A совпадает с рамками p1 и p2 на всех кадрах
-        "A": {f: box for f in range(0, 10)},
+        # A совпадает и с p1, и с p2 на всех кадрах
+        "A": {f: (box_p1 if f % 2 == 0 else box_p2) for f in range(0, 10)},
         # B совпадает с p1 на кадрах 0..4 (5/10) и далёк на 5..9;
-        # с p2 не совпадает ни на одном кадре (0/10)
-        "B": {f: (box if f < 5 else far) for f in range(0, 10)},
+        # с p2 (box_p2) не совпадает ни на одном кадре.
+        "B": {f: (box_p1 if f < 5 else far) for f in range(0, 10)},
     }
 
+    # Проверим допустимость по правилу >= 0.5 от inter
     ok_p1_A = pair_admissible(p1, A, pred_boxes["p1"], ref_boxes["A"])[0]
     ok_p1_B = pair_admissible(p1, B, pred_boxes["p1"], ref_boxes["B"])[0]
     ok_p2_A = pair_admissible(p2, A, pred_boxes["p2"], ref_boxes["A"])[0]
