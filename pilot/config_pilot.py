@@ -50,10 +50,21 @@ ANNOTATED_VIDEO = os.path.join(PILOT_DIR, "pilot_annotated.mp4")
 REPORT_JSON = os.path.join(PILOT_DIR, "evaluator_report.json")
 
 # Размеченный вручную короткий фрагмент (эталон) — заполняется по факту.
-# Формат: список dict(track_id, start_frame, end_frame, in_crosswalk, boxes?)
-# boxes: опционально {frame_idx: (x1,y1,x2,y2)} для пространственного
-# подтверждения. Если boxes нет — пространственная проверка пропускается
-# (фиксируется в отчёте как "spatial: skipped").
+#
+# Формат эталона (список dict):
+#   {
+#     "event_id": int,              # обязательный самостоятельный ID эталона
+#     "track_id": int,              # истинный ID человека (ручная разметка)
+#     "start_frame": int,           # первый кадр события (вне ROI)
+#     "end_frame": int,             # последний кадр события (вне ROI)
+#     "in_crosswalk": bool,         # для контроля: False для события-нарушения
+#     "boxes": {frame_idx: (x1, y1, x2, y2)} | None,
+#   }
+# boxes: покадровые рамки размеченного человека. Если boxes отсутствуют
+# (None/пусто) — это ДИАГНОСТИЧЕСКИЙ режим: пространственная проверка
+# пропускается, что явно фиксируется в отчёте (spatial: skipped).
+# Полная оценка по принятому правилу требует boxes хотя бы на кадрах
+# пересечения интервалов.
 REFERENCE_EVENTS = []
 
 # ----- Две сопоставимые выгрузки пилота: conf=0.5 (baseline) и conf=0.2 (proposed) -----
@@ -75,6 +86,8 @@ def run_paths(tag):
         "notifications": os.path.join(PILOT_DIR, f"notifications_{tag}.csv"),
         "latency": os.path.join(PILOT_DIR, f"latency_{tag}.json"),
         "annotated": os.path.join(PILOT_DIR, f"pilot_annotated_{tag}.mp4"),
+        # отдельный отчёт по каждой выгрузке (замечание 3)
+        "report": os.path.join(PILOT_DIR, f"evaluator_report_{tag}.json"),
     }
 
 

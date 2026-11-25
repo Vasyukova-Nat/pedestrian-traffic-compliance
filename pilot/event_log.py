@@ -12,7 +12,10 @@ start_frame — первый кадр вне ROI, end_frame — последни
 Уведомление (event_open) выдаётся не в момент технического открытия
 кандидата, а при подтверждении: когда длительность события достигает
 MIN_EVENT_FRAMES. Техническое открытие кандидата пишется отдельным
-типом записи "event_candidate".
+типом записи "event_candidate". Каждое событие получает самостоятельный
+event_id; уведомление event_open ссылается на него, поэтому связь
+уведомление→событие не зависит от того, совпадает ли кадр подтверждения
+с start_frame.
 
 Пропуски трека: короткие пропуски (< GAP_FRAMES) не продлевают событие
 и не входят в длительность; длительность считается по числу кадров,
@@ -23,7 +26,8 @@ MIN_EVENT_FRAMES. Техническое открытие кандидата п�
 
 
 class Event:
-    def __init__(self, track_id, start_frame, center):
+    def __init__(self, event_id, track_id, start_frame, center):
+        self.event_id = event_id
         self.track_id = track_id
         self.start_frame = start_frame
         self.end_frame = None
@@ -40,6 +44,7 @@ class Event:
 
     def as_dict(self):
         return {
+            "event_id": self.event_id,
             "track_id": self.track_id,
             "start_frame": self.start_frame,
             "end_frame": self.end_frame,
@@ -55,7 +60,14 @@ class EventLog:
         self.open = {}         # track_id -> Event
         self.last_seen = {}    # track_id -> frame_idx (любое наблюдение)
         self.events = []       # закрытые события
-        self.notifications = []  # (frame_idx, track_id, kind)
+        # (frame_idx, track_id, kind, event_id)
+        self.notifications = []
+        self._next_event_id = 1
+
+    def _alloc_event_id(self):
+        eid = self._next_event_id
+        self._next_event_id += 1
+        return eid
 
     def update(self, frame_idx, detections):
         """detections: список (track_id, center, in_crosswalk)."""
@@ -66,10 +78,12 @@ class EventLog:
 
             if not in_crosswalk:
                 if track_id not in self.open:
-                    ev = Event(track_id, frame_idx, center)
+                    ev = Event(self._alloc_event_id(), track_id,
+                               frame_idx, center)
                     self.open[track_id] = ev
                     # техническое открытие кандидата — отдельный тип записи
-                    self.notifications.append((frame_idx, track_id, "event_candidate"))
+                    self.notifications.append(
+                        (frame_idx, track_id, "event_candidate", ev.event_id))
                 else:
                     ev = self.open[track_id]
                     ev.centers.append(center)
@@ -80,7 +94,8 @@ class EventLog:
                 # подтверждение уведомления при достижении порога
                 if not ev.notified and ev.duration >= self.min_event_frames:
                     ev.notified = True
-                    self.notifications.append((frame_idx, track_id, "event_open"))
+                    self.notifications.append(
+                        (frame_idx, track_id, "event_open", ev.event_id))
             else:
                 # вернулся в зону — закрываем событие на последнем кадре вне ROI
                 if track_id in self.open:

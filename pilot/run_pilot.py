@@ -9,6 +9,9 @@
   - notify_ms: полное формирование события/уведомления на кадре.
 Счётчики кандидатов по этапам: после conf, после NMS (детектор),
 после трекера, число детекций-кандидатов в ассоциации.
+
+В события и уведомления пишется самостоятельный event_id: уведомление
+event_open ссылается на событие по event_id, а не по совпадению кадра.
 """
 
 import csv
@@ -164,17 +167,17 @@ def _annotate(frame, frame_rows, event_log):
 def _write_events(event_log, paths):
     with open(paths["events"], "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["track_id", "start_frame", "end_frame",
+        writer.writerow(["event_id", "track_id", "start_frame", "end_frame",
                          "duration", "close_reason"])
         for ev in event_log.events:
             d = ev.as_dict()
-            writer.writerow([d["track_id"], d["start_frame"], d["end_frame"],
-                             d["duration"], d["close_reason"]])
+            writer.writerow([d["event_id"], d["track_id"], d["start_frame"],
+                             d["end_frame"], d["duration"], d["close_reason"]])
 
     with open(paths["notifications"], "w",
               newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["frame", "track_id", "kind"])
+        writer.writerow(["frame", "track_id", "kind", "event_id"])
         for row in event_log.notifications:
             writer.writerow(row)
 

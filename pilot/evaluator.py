@@ -4,20 +4,25 @@
 в notifications_<tag>.csv) длительностью не менее MIN_EVENT_FRAMES.
 Технические "event_candidate" и короткие события в оценку не входят.
 
+Связь уведомление→событие выполняется по самостоятельному event_id,
+который пишется и в events_<tag>.csv, и в notifications_<tag>.csv.
+Кадр подтверждения event_open может отличаться от start_frame — это
+нормально и на связь не влияет.
+
 Сопоставление (алгоритм назначения):
   1) Строится матрица допустимости пар (предсказание, эталон).
      Пара допустима, если:
        - перекрытие по времени >= 50% длительности КАЖДОГО из событий;
        - на кадрах пересечения интервалов трек предсказания перекрывает
          объект ручной разметки при IoU >= 0.5 не менее чем в 50% кадров
-         пересечения (если для эталона заданы boxes; иначе шаг пропускается).
+         пересечения (если для эталона заданы boxes; иначе шаг пропускается
+         и режим помечается диагностическим).
      Технический номер предсказанного трека НЕ приравнивается к истинному ID.
   2) Назначение — взаимно-однозначное, с лексикографической максимизацией:
        (a) число допустимых пар,
        (b) суммарное число кадров совместного подтверждения,
        (c) стабильность по ID (лексикографический порядок по (start_pred,
            track_pred, start_ref, track_ref)) при равенстве (a) и (b).
-     Одна максимизация веса без (a) не гарантирует максимума числа пар.
   3) Классификация после назначения:
        - пара в назначении -> TP;
        - предсказание без допустимых пар -> FP;
@@ -30,12 +35,16 @@
   - короткое событие, граничная длительность ±1, разрыв трека,
     отсутствие дублей уведомлений, два события одного человека;
   - конкурирующее назначение, одинаковые дубли, краткое пересечение,
-    несопоставленное уведомление, фильтр длительности.
+    несопоставленное уведомление, фильтр длительности;
+  - интеграционная проверка: генератор -> CSV -> загрузка всех
+    подтверждённых уведомлений (включая два события одного track_id).
 """
 
+import csv
 import json
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -287,6 +296,73 @@ def check_two_events_same_person():
     return {"name": "two_events_same_person", "ok": True, "events": 2}
 
 
+# ---------- Интеграционная проверка: генератор -> CSV -> загрузчик ----------
+
+def _write_csvs_for_log(log, dirpath):
+    """Пишет events/notifications в формате run_pilot.py (с event_id)."""
+    ev_path = os.path.join(dirpath, "events_test.csv")
+    nt_path = os.path.join(dirpath, "notifications_test.csv")
+    with open(ev_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["event_id", "track_id", "start_frame", "end_frame",
+                    "duration", "close_reason"])
+        for ev in log.events:
+            d = ev.as_dict()
+            w.writerow([d["event_id"], d["track_id"], d["start_frame"],
+                        d["end_frame"], d["duration"], d["close_reason"]])
+    with open(nt_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["frame", "track_id", "kind", "event_id"])
+        for row in log.notifications:
+            w.writerow(row)
+    return nt_path, ev_path
+
+
+def _load_predicted_from_paths(notif_path, events_path):
+    """Связь event_open -> событие по event_id. Только значимые события."""
+    notifs = _read_notifications(notif_path)
+    events = _read_events(events_path)
+    by_id = {e["event_id"]: e for e in events}
+    preds = []
+    for i, n in enumerate(notifs):
+        ev = by_id.get(n["event_id"])
+        if ev is None:
+            continue
+        if ev["duration"] < P.MIN_EVENT_FRAMES:
+            continue
+        preds.append({
+            "row_id": f"pred_{i}",
+            "event_id": ev["event_id"],
+            "track_id": ev["track_id"],
+            "start_frame": ev["start_frame"],
+            "end_frame": ev["end_frame"],
+        })
+    return preds
+
+
+def check_notification_event_link():
+    # Два события одного track_id, каждое подтверждается ПОЗЖЕ start_frame.
+    # Проверяем, что загрузчик находит оба подтверждённых уведомления
+    # по event_id, а не по (track_id, кадр).
+    spec = ([(1, True)] + [(1, False)] * 6 + [(1, True)] * 3
+            + [(1, False)] * 6 + [(1, True)])
+    log = run_event_log(_trace(spec), gap_frames=100, min_frames=5)
+    opens = _opens(log, 1)
+    assert len(opens) == 2, f"ожидалось 2 event_open, получено {len(opens)}"
+    # уведомления сдвинуты относительно start_frame
+    for ev in log.events:
+        if ev.track_id == 1:
+            assert ev.notified
+    with tempfile.TemporaryDirectory() as td:
+        nt_path, ev_path = _write_csvs_for_log(log, td)
+        preds = _load_predicted_from_paths(nt_path, ev_path)
+    # оба события одного track_id должны найтись
+    assert len(preds) == 2, f"загрузчик нашёл {len(preds)} из 2"
+    assert len({p["event_id"] for p in preds}) == 2
+    return {"name": "notification_event_link", "ok": True,
+            "preds_loaded": len(preds), "same_track_id": True}
+
+
 # ---------- Проверки назначения событий (не генератора) ----------
 
 def _pred(pid, tid, s, e):
@@ -359,7 +435,6 @@ def check_duration_filter():
 # ---------- Оценка на эталоне (полный путь) ----------
 
 def _read_notifications(path):
-    import csv
     rows = []
     if not os.path.exists(path):
         return rows
@@ -367,18 +442,19 @@ def _read_notifications(path):
         for row in csv.DictReader(f):
             if row["kind"] == "event_open":
                 rows.append({"frame": int(row["frame"]),
-                             "track_id": int(row["track_id"])})
+                             "track_id": int(row["track_id"]),
+                             "event_id": int(row["event_id"])})
     return rows
 
 
 def _read_events(path):
-    import csv
     rows = []
     if not os.path.exists(path):
         return rows
     with open(path, encoding="utf-8") as f:
         for row in csv.DictReader(f):
             rows.append({
+                "event_id": int(row["event_id"]),
                 "track_id": int(row["track_id"]),
                 "start_frame": int(row["start_frame"]),
                 "end_frame": int(row["end_frame"]),
@@ -388,45 +464,120 @@ def _read_events(path):
     return rows
 
 
+def _read_frames_boxes(path, start_frame, end_frame, track_id):
+    """Покадровые рамки предсказания из frames_<tag>.csv по track_id
+    в интервале [start_frame, end_frame]. Возвращает {frame: (x1,y1,x2,y2)}
+    или None, если рамок нет."""
+    if not os.path.exists(path):
+        return None
+    boxes = {}
+    with open(path, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if int(row["track_id"]) != track_id:
+                continue
+            fr = int(row["frame"])
+            if fr < start_frame or fr > end_frame:
+                continue
+            boxes[fr] = (float(row["x1"]), float(row["y1"]),
+                         float(row["x2"]), float(row["y2"]))
+    return boxes or None
+
+
 def load_predicted(tag):
-    """Только подтверждённые уведомления (event_open), длительность >= порога.
-    Интервал берётся из events_<tag>.csv по (track_id, start_frame)."""
+    """Подтверждённые уведомления (event_open), длительность >= порога.
+    Связь с событием — по самостоятельному event_id (не по кадру/track_id).
+    Покадровые рамки предсказания подтягиваются из frames_<tag>.csv."""
     paths = P.run_paths(tag)
     notifs = _read_notifications(paths["notifications"])
     events = _read_events(paths["events"])
-    by_key = {(e["track_id"], e["start_frame"]): e for e in events}
+    by_id = {e["event_id"]: e for e in events}
     preds = []
+    pred_boxes = {}
     for i, n in enumerate(notifs):
-        ev = by_key.get((n["track_id"], n["frame"]))
+        ev = by_id.get(n["event_id"])
         if ev is None:
             continue
         if ev["duration"] < P.MIN_EVENT_FRAMES:
             continue
+        rid = f"pred_{i}"
         preds.append({
-            "row_id": f"pred_{i}",
+            "row_id": rid,
+            "event_id": ev["event_id"],
             "track_id": ev["track_id"],
             "start_frame": ev["start_frame"],
             "end_frame": ev["end_frame"],
         })
-    return preds
+        pred_boxes[rid] = _read_frames_boxes(
+            paths["frames"], ev["start_frame"], ev["end_frame"],
+            ev["track_id"])
+    return preds, pred_boxes
 
 
-def evaluate_on_reference(tag=None):
+def _ref_rows_and_boxes():
+    """Строит refs с row_id=ref_<event_id> и словарь покадровых рамок
+    эталона по этому же row_id. Формат REFERENCE_EVENTS — см.
+    config_pilot.py. Если boxes отсутствуют — соответствующий ref
+    остаётся без рамок (диагностический режим)."""
+    refs = []
+    ref_boxes = {}
+    for r in P.REFERENCE_EVENTS:
+        eid = int(r["event_id"])
+        rid = f"ref_{eid}"
+        refs.append({
+            "row_id": rid,
+            "event_id": eid,
+            "track_id": int(r["track_id"]),
+            "start_frame": int(r["start_frame"]),
+            "end_frame": int(r["end_frame"]),
+        })
+        boxes = r.get("boxes")
+        if boxes:
+            ref_boxes[rid] = {int(f): tuple(map(float, b))
+                              for f, b in boxes.items()}
+        else:
+            ref_boxes[rid] = None
+    return refs, ref_boxes
+
+
+def _evaluate_tag(tag):
+    """Полная оценка одной выгрузки на эталоне.
+    Возвращает dict с метриками и признаком диагностического режима,
+    если у эталона отсутствуют рамки."""
+    preds, pred_boxes = load_predicted(tag)
+    refs, ref_boxes = _ref_rows_and_boxes()
+
+    # Диагностический режим: хотя бы у одного эталона нет рамок ->
+    # пространственная проверка для него не выполняется.
+    has_boxes = [rid for rid, b in ref_boxes.items() if b]
+    spatial_skipped = len(has_boxes) < len(ref_boxes)
+
+    # Для ref без рамок pair_admissible пропускает пространственный шаг,
+    # для ref с рамками — требует перекрытия рамок предсказания и эталона.
+    cls = classify(preds, refs, pred_boxes=pred_boxes, ref_boxes=ref_boxes)
+    metrics = _metrics(cls, len(preds), len(refs))
+    metrics.update({
+        "tag": tag,
+        "diagnostic": bool(spatial_skipped),
+        "spatial": "skipped" if spatial_skipped else "checked",
+        "note": ("пространственная проверка пропущена для части эталона: "
+                 "у соответствующих событий нет boxes" if spatial_skipped
+                 else "полная оценка: временная и пространственная проверка"),
+    })
+    return metrics
+
+
+def evaluate_on_reference():
     if not P.REFERENCE_EVENTS:
         return {"reference_events": 0, "note": "эталон не задан"}
-    tag = tag or next(iter(P.RUNS))
-    preds = load_predicted(tag)
-    refs = []
-    for i, r in enumerate(P.REFERENCE_EVENTS):
-        refs.append({
-            "row_id": f"ref_{i}",
-            "track_id": r["track_id"],
-            "start_frame": r["start_frame"],
-            "end_frame": r["end_frame"],
-        })
-    ref_boxes = {r["row_id"]: r.get("boxes") for r in P.REFERENCE_EVENTS}
-    cls = classify(preds, refs, pred_boxes=None, ref_boxes=ref_boxes)
-    return _metrics(cls, len(preds), len(refs))
+    per_tag = {}
+    for tag in P.RUNS:
+        per_tag[tag] = _evaluate_tag(tag)
+    # сводка: эталон один и тот же, оценки — по каждой выгрузке
+    return {
+        "reference_events": len(P.REFERENCE_EVENTS),
+        "per_run": per_tag,
+        "note": "оценка выполнена для каждой выгрузки на одном эталоне",
+    }
 
 
 # ---------- Main ----------
@@ -436,6 +587,7 @@ def run_checks():
     for fn in (check_short_event, check_boundary_duration,
                check_boundary_plus_minus_one, check_track_gap,
                check_no_duplicate_notification, check_two_events_same_person,
+               check_notification_event_link,
                check_competing_assignment, check_identical_duplicates,
                check_short_overlap, check_unmatched_notification,
                check_duration_filter, _check_example_runs):
@@ -468,6 +620,15 @@ def main():
     }
     with open(P.REPORT_JSON, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
+
+    # Отдельные отчёты по каждой выгрузке (если эталон задан)
+    if P.REFERENCE_EVENTS:
+        per_tag = report["reference"].get("per_run", {})
+        for tag, metrics in per_tag.items():
+            path = P.run_paths(tag)["report"]
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(metrics, f, ensure_ascii=False, indent=2)
+
     ok = all(c["ok"] for c in checks)
     print(f"Проверки оценщика: {'OK' if ok else 'FAIL'}")
     print(f"Отчёт: {P.REPORT_JSON}")
