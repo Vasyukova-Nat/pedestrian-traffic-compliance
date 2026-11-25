@@ -4,14 +4,23 @@
 Две сопоставимые выгрузки: conf=0.5 (baseline) и conf=0.2 (proposed);
 остальные настройки одинаковы. ByteTrack создаётся с явными численными
 параметрами и фактическим frame_rate. Замеряются раздельно:
-  - detector_ms: только инференс YOLO;
-  - model_plus_tracker_ms: модель + обновление трекера;
-  - notify_ms: полное формирование события/уведомления на кадре.
-Счётчики кандидатов по этапам: после conf, после NMS (детектор),
-после трекера, число детекций-кандидатов в ассоциации.
+  - model_call_ms: ВЕСЬ вызов модели (препроцесс + инференс + постпроцесс
+    внутри Ultralytics), а не только инференс;
+  - model_plus_tracker_ms: вызов модели + обновление трекера;
+  - notify_ms: обработка текущего кадра до обновления журнала событий
+    (НЕ включает ожидание накопления K наблюдений и НЕ является сквозной
+    задержкой уведомления).
+Первые WARMUP_FRAMES кадров не входят в статистику. Флаг
+meets_min_measured показывает, достигнут ли MIN_MEASURED_FRAMES — без
+этого замеры считаются отладочными, а не завершённой проверкой 200 мс.
 
-В события и уведомления пишется самостоятельный event_id: уведомление
-event_open ссылается на событие по event_id, а не по совпадению кадра.
+Счётчики этапов:
+  - after_conf: боксы, прошедшие порог уверенности (до NMS модели
+    недоступны как отдельный этап, поэтому after_conf = боксы после порога);
+  - after_nms: выход модели после NMS (то, что вернул Ultralytics);
+  - assoc_candidates: число детекций на входе трекера (кандидаты
+    ассоциации), а не раздельные группы ассоциации;
+  - after_tracker: число треков на выходе трекера.
 """
 
 import csv
@@ -65,7 +74,8 @@ def run_one(tag, conf):
 
     tracker = _make_tracker(frame_rate)
     event_log = EventLog(P.GAP_FRAMES, P.MIN_EVENT_FRAMES)
-    det_ms, mt_ms, ntf_ms = [], [], []
+    # измеряемые замеры (без прогрева)
+    model_ms, mt_ms, ntf_ms = [], [], []
     stage_counts = {"after_conf": 0, "after_nms": 0,
                     "after_tracker": 0, "assoc_candidates": 0}
 
@@ -84,12 +94,19 @@ def run_one(tag, conf):
             results = model(frame, conf=conf, iou=P.IOU, imgsz=P.IMGSZ,
                             classes=P.CLASSES, verbose=False)
             t1 = time.perf_counter()
-            # после conf и NMS (NMS уже выполнен внутри model)
-            n_after = len(results[0].boxes)
-            stage_counts["after_conf"] += n_after
-            stage_counts["after_nms"] += n_after
 
-            detections = sv.Detections.from_ultralytics(results[0])
+            res = results[0]
+            # after_nms: выход модели после NMS (то, что вернул Ultralytics)
+            n_after_nms = len(res.boxes)
+            # after_conf: боксы, прошедшие порог уверенности. Отдельного
+            # «до NMS модели» этапа нет; фиксируем честно как после порога.
+            confs = res.boxes.conf
+            n_after_conf = int((confs >= conf).sum()) if confs is not None else 0
+            stage_counts["after_conf"] += n_after_conf
+            stage_counts["after_nms"] += n_after_nms
+
+            detections = sv.Detections.from_ultralytics(res)
+            # assoc_candidates: вход трекера (кандидаты ассоциации)
             stage_counts["assoc_candidates"] += len(detections)
             detections = tracker.update_with_detections(detections)
             t2 = time.perf_counter()
@@ -113,9 +130,11 @@ def run_one(tag, conf):
                              [(t, c, in_cw) for t, c, in_cw, _, _ in frame_rows])
             t3 = time.perf_counter()
 
-            det_ms.append((t1 - t0) * 1000.0)
-            mt_ms.append((t2 - t0) * 1000.0)
-            ntf_ms.append((t3 - t0) * 1000.0)
+            # прогрев: первые WARMUP_FRAMES не входят в статистику
+            if frame_idx >= P.WARMUP_FRAMES:
+                model_ms.append((t1 - t0) * 1000.0)
+                mt_ms.append((t2 - t0) * 1000.0)
+                ntf_ms.append((t3 - t0) * 1000.0)
 
             for track_id, (cx, cy), in_cw, xyxy, conf_val in frame_rows:
                 writer.writerow([frame_idx, track_id,
@@ -132,7 +151,8 @@ def run_one(tag, conf):
 
     event_log.finalize(frame_idx - 1)
     _write_events(event_log, paths)
-    _write_latency(det_ms, mt_ms, ntf_ms, fps, frame_rate, stage_counts, paths)
+    _write_latency(model_ms, mt_ms, ntf_ms, fps, frame_rate,
+                   stage_counts, paths)
 
     print(f"[{tag}] conf={conf}: кадров {frame_idx}, "
           f"событий {len(event_log.events)}, "
@@ -182,7 +202,8 @@ def _write_events(event_log, paths):
             writer.writerow(row)
 
 
-def _write_latency(det_ms, mt_ms, ntf_ms, fps, frame_rate, stage_counts, paths):
+def _write_latency(model_ms, mt_ms, ntf_ms, fps, frame_rate,
+                   stage_counts, paths):
     def stats(arr):
         a = np.array(arr)
         return {
@@ -192,19 +213,38 @@ def _write_latency(det_ms, mt_ms, ntf_ms, fps, frame_rate, stage_counts, paths):
             "p95": float(np.percentile(a, 95)) if a.size else None,
             "max": float(a.max()) if a.size else None,
         }
+    measured_frames = len(mt_ms)
     payload = {
         "source_fps": float(fps),
         "tracker_frame_rate": int(frame_rate),
         "torch_num_threads": P.TORCH_NUM_THREADS,
-        "detector_ms": stats(det_ms),
+        "warmup_frames": int(P.WARMUP_FRAMES),
+        "measured_frames": int(measured_frames),
+        "min_measured_frames": int(P.MIN_MEASURED_FRAMES),
+        "meets_min_measured": bool(measured_frames >= P.MIN_MEASURED_FRAMES),
+        "model_call_ms": stats(model_ms),
         "model_plus_tracker_ms": stats(mt_ms),
         "notify_ms": stats(ntf_ms),
+        "scope": {
+            "model_call_ms": "весь вызов модели Ultralytics (препроцесс + "
+                             "инференс + постпроцесс), не только инференс",
+            "model_plus_tracker_ms": "model_call_ms + обновление трекера",
+            "notify_ms": "обработка кадра до обновления журнала; НЕ включает "
+                         "ожидание накопления K наблюдений и НЕ является "
+                         "сквозной задержкой уведомления",
+        },
         "effective_fps_model_plus_tracker": (
             float(1000.0 / np.mean(mt_ms)) if mt_ms and np.mean(mt_ms) else None
         ),
         "stage_counts": stage_counts,
+        "stage_counts_note": "after_conf — боксы после порога уверенности; "
+                             "after_nms — выход модели после NMS; "
+                             "assoc_candidates — вход трекера (кандидаты "
+                             "ассоциации, не раздельные группы); "
+                             "after_tracker — выход трекера",
         "note": "сокращённая ветвь: единый conf, без размерного фильтра; "
-                "stage_counts — суммарные числа кандидатов по этапам",
+                "без прогрева и без MIN_MEASURED_FRAMES замеры отладочные, "
+                "а не завершённая проверка 200 мс",
     }
     with open(paths["latency"], "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)

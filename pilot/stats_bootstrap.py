@@ -166,7 +166,7 @@ def signflip_pvalue(blocks_a, blocks_b, metric, n_perm=2000, seed=0):
 # ---------- Исполняемые проверки правил ----------
 
 def _check_ratio_of_sums_example():
-    # Замечание 5: baseline (1,0,0) и (0,0,1); proposed (1,0,0) и (0,1,1).
+    # baseline (1,0,0) и (0,0,1); proposed (1,0,0) и (0,1,1).
     # Полные Precision: baseline = 1/1 = 1, proposed = 1/2 = 0.5,
     # разность = -0.5. Предварительное удаление второго блока запрещено.
     ba = [{"tp": 1, "fp": 0, "fn": 0}, {"tp": 0, "fp": 0, "fn": 1}]
@@ -180,7 +180,7 @@ def _check_ratio_of_sums_example():
 
 
 def _check_conditional_achievable():
-    # Замечание 5: conditional=True должен быть достижим на корректных
+    # conditional=True должен быть достижим на корректных
     # неотрицательных счётчиках. Блок 2 даёт нулевой знаменатель
     # Precision только при определённом стечении реплик.
     ba = [{"tp": 1, "fp": 0, "fn": 0}, {"tp": 0, "fp": 0, "fn": 1}]
