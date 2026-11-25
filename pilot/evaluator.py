@@ -9,35 +9,39 @@
 Кадр подтверждения event_open может отличаться от start_frame — это
 нормально и на связь не влияет.
 
-Сопоставление (алгоритм назначения):
+Пространственный критерий (согласован с методикой):
+  Пара допустима, если:
+    - перекрытие по времени >= 50% длительности КАЖДОГО из событий;
+    - на ВСЕХ кадрах пересечения интервалов доля кадров, где рамка
+      предсказания перекрывает рамку эталона при IoU >= 0.5, составляет
+      не менее 50%. Кадр пересечения без одной из рамок считается
+      НЕПОДТВЕРЖДЁННЫМ и входит в знаменатель (inter), но не в числитель.
+  Если у эталона вообще нет boxes — это диагностический режим,
+  пространственная проверка пропускается и это явно фиксируется.
+
+Назначение (алгоритм):
   1) Строится матрица допустимости пар (предсказание, эталон).
-     Пара допустима, если:
-       - перекрытие по времени >= 50% длительности КАЖДОГО из событий;
-       - на кадрах пересечения интервалов трек предсказания перекрывает
-         объект ручной разметки при IoU >= 0.5 не менее чем в 50% кадров
-         пересечения (если для эталона заданы boxes; иначе шаг пропускается
-         и режим помечается диагностическим).
-     Технический номер предсказанного трека НЕ приравнивается к истинному ID.
   2) Назначение — взаимно-однозначное, с лексикографической максимизацией:
        (a) число допустимых пар,
-       (b) суммарное число кадров совместного подтверждения,
-       (c) стабильность по ID (лексикографический порядок по (start_pred,
-           track_pred, start_ref, track_ref)) при равенстве (a) и (b).
-  3) Классификация после назначения:
-       - пара в назначении -> TP;
-       - предсказание без допустимых пар -> FP;
-       - предсказание с допустимыми парами, все проигравшие -> дубль;
-       - эталон без сопоставленного TP -> FN.
-  Самостоятельные ID записей: каждое предсказание и каждый эталон получают
-  собственный row_id, поэтому одинаковые дубли не теряются.
+       (b) суммарное число кадров совместного ПРОСТРАНСТВЕННОГО
+           подтверждения (spatial_ok) — не полное временное перекрытие,
+       (c) при равенстве (b) — меньшая суммарная длительность эталонных
+           событий (приоритет короткого эталона),
+       (d) стабильный ключ по (start_pred, track_pred, row_id_pred,
+           start_ref, track_ref, row_id_ref) — включает row_id, поэтому
+           перестановка одинаковых предсказаний не меняет выбор TP.
+  3) Классификация: пара в назначении -> TP; предсказание без допустимых
+     пар -> FP; предсказание с допустимыми парами, все проигравшие -> дубль;
+     эталон без сопоставленного TP -> FN.
 
 Проверки (падение -> ненулевой код возврата):
   - короткое событие, граничная длительность ±1, разрыв трека,
     отсутствие дублей уведомлений, два события одного человека;
-  - конкурирующее назначение, одинаковые дубли, краткое пересечение,
-    несопоставленное уведомление, фильтр длительности;
-  - интеграционная проверка: генератор -> CSV -> загрузка всех
-    подтверждённых уведомлений (включая два события одного track_id).
+  - интеграционная проверка генератор -> CSV -> загрузка;
+  - пространственный критерий (1/10 не подтверждается), приоритет
+    длительности эталона, разрешение равенств по row_id, конкурирующее
+    назначение «второе только к A», одинаковые дубли, краткое пересечение,
+    несопоставленное уведомление, фильтр длительности.
 """
 
 import csv
@@ -76,89 +80,121 @@ def _iou(box_a, box_b):
     return inter / union if union > 0 else 0.0
 
 
+def spatial_ok(pred, ref, pred_boxes, ref_boxes):
+    """Число кадров пересечения интервалов, где рамки обеих сторон есть
+    и IoU >= 0.5. Знаменатель пространственной проверки — ВСЕ кадры
+    пересечения (inter), включая кадры без одной из рамок."""
+    if ref_boxes is None or not ref_boxes:
+        return None  # диагностический режим: проверка не выполняется
+    f0 = max(pred["start_frame"], ref["start_frame"])
+    f1 = min(pred["end_frame"], ref["end_frame"])
+    if f1 < f0:
+        return 0
+    good = 0
+    for f in range(f0, f1 + 1):
+        rb = ref_boxes.get(f)
+        pb = pred_boxes.get(f) if pred_boxes else None
+        if rb is None or pb is None:
+            # кадр пересечения без одной из рамок — не подтверждён
+            continue
+        if _iou(pb, rb) >= 0.5:
+            good += 1
+    return good
+
+
 def pair_admissible(pred, ref, pred_boxes=None, ref_boxes=None):
-    """pred/ref: dict(track_id, start_frame, end_frame).
-    pred_boxes/ref_boxes: {frame_idx: (x1,y1,x2,y2)} или None.
-    Возвращает (admissible, overlap_frames)."""
+    """Возвращает (admissible, inter, spatial_good).
+    inter — длина пересечения интервалов; spatial_good — число кадров
+    пространственного подтверждения (None, если рамки эталона не заданы)."""
     inter = interval_overlap(pred["start_frame"], pred["end_frame"],
                              ref["start_frame"], ref["end_frame"])
     if inter <= 0:
-        return False, 0
+        return False, 0, 0
     if inter < 0.5 * interval_len(pred["start_frame"], pred["end_frame"]):
-        return False, inter
+        return False, inter, 0
     if inter < 0.5 * interval_len(ref["start_frame"], ref["end_frame"]):
-        return False, inter
+        return False, inter, 0
 
-    # пространственное подтверждение (если заданы рамки эталона)
-    if ref_boxes is not None:
-        if pred_boxes is None:
-            return False, inter
-        f0 = max(pred["start_frame"], ref["start_frame"])
-        f1 = min(pred["end_frame"], ref["end_frame"])
-        good = total = 0
-        for f in range(f0, f1 + 1):
-            rb = ref_boxes.get(f)
-            pb = pred_boxes.get(f)
-            if rb is None or pb is None:
-                continue
-            total += 1
-            if _iou(pb, rb) >= 0.5:
-                good += 1
-        if total == 0:
-            return False, inter
-        if good / total < 0.5:
-            return False, inter
-    return True, inter
+    good = spatial_ok(pred, ref, pred_boxes, ref_boxes)
+    if good is None:
+        # пространственная проверка не задана — только временные условия
+        return True, inter, None
+    # знаменатель — ВСЕ кадры пересечения; требование >= 0.5
+    if good / inter < 0.5:
+        return False, inter, good
+    return True, inter, good
 
 
 def _assign(preds, refs, pred_boxes, ref_boxes):
-    """Лексикографическое назначение: max(пар), затем max(кадров), затем
-    стабильные ID. preds/refs — списки dict с row_id.
+    """Лексикографическое назначение:
+      max(пар), затем max(сумма spatial_good), затем min(сумма длительностей
+      эталона), затем стабильный ключ с row_id.
     Возвращает dict pred_row_id -> ref_row_id."""
     n, m = len(preds), len(refs)
     adm = [[False] * m for _ in range(n)]
-    overlap = [[0] * m for _ in range(n)]
+    spatial = [[0] * m for _ in range(n)]
     for i, p in enumerate(preds):
         for j, r in enumerate(refs):
-            ok, ov = pair_admissible(
+            ok, _inter, good = pair_admissible(
                 p, r,
                 pred_boxes.get(p["row_id"]) if pred_boxes else None,
                 ref_boxes.get(r["row_id"]) if ref_boxes else None,
             )
             adm[i][j] = ok
-            overlap[i][j] = ov
+            spatial[i][j] = good if good is not None else 0
 
-    best = {"pairs": -1, "frames": -1, "key": None, "assign": {}}
+    best = {"pairs": -1, "spatial": -1, "ref_len": None,
+            "key": None, "assign": {}}
 
-    def dfs(i, used_refs, pairs, frames, assign):
+    def dfs(i, used_refs, pairs, spatial_sum, ref_len_sum, assign):
         if i == n:
             key = tuple(sorted(
                 (preds[pi]["start_frame"], preds[pi]["track_id"],
-                 refs[rj]["start_frame"], refs[rj]["track_id"])
+                 preds[pi]["row_id"],
+                 refs[rj]["start_frame"], refs[rj]["track_id"],
+                 refs[rj]["row_id"])
                 for pi, rj in assign.items()
             ))
-            cand = {"pairs": pairs, "frames": frames, "key": key,
+            cand = {"pairs": pairs, "spatial": spatial_sum,
+                    "ref_len": ref_len_sum, "key": key,
                     "assign": dict(assign)}
-            # лексикографическая максимизация: пары, кадры, затем
-            # минимальный (стабильный) ключ при равенстве
-            if (cand["pairs"], cand["frames"]) > (best["pairs"], best["frames"]) or \
-               ((cand["pairs"], cand["frames"]) == (best["pairs"], best["frames"])
-                and (best["key"] is None or cand["key"] < best["key"])):
+            better = (
+                (cand["pairs"], cand["spatial"]) >
+                (best["pairs"], best["spatial"])
+                or (
+                    (cand["pairs"], cand["spatial"]) ==
+                    (best["pairs"], best["spatial"])
+                    and (
+                        best["ref_len"] is None
+                        or cand["ref_len"] < best["ref_len"]
+                        or (
+                            cand["ref_len"] == best["ref_len"]
+                            and (best["key"] is None
+                                 or cand["key"] < best["key"])
+                        )
+                    )
+                )
+            )
+            if better:
                 best.update(cand)
             return
         # вариант: оставить предсказание без пары
-        dfs(i + 1, used_refs, pairs, frames, assign)
+        dfs(i + 1, used_refs, pairs, spatial_sum, ref_len_sum, assign)
         # вариант: сопоставить с каждым допустимым свободным эталоном
         for j in range(m):
             if j in used_refs or not adm[i][j]:
                 continue
             assign[i] = j
             used_refs.add(j)
-            dfs(i + 1, used_refs, pairs + 1, frames + overlap[i][j], assign)
+            dfs(i + 1, used_refs, pairs + 1,
+                spatial_sum + spatial[i][j],
+                ref_len_sum + interval_len(refs[j]["start_frame"],
+                                           refs[j]["end_frame"]),
+                assign)
             used_refs.remove(j)
             del assign[i]
 
-    dfs(0, set(), 0, 0, {})
+    dfs(0, set(), 0, 0, 0, {})
     return {preds[i]["row_id"]: refs[j]["row_id"]
             for i, j in best["assign"].items()}
 
@@ -349,21 +385,19 @@ def check_notification_event_link():
     log = run_event_log(_trace(spec), gap_frames=100, min_frames=5)
     opens = _opens(log, 1)
     assert len(opens) == 2, f"ожидалось 2 event_open, получено {len(opens)}"
-    # уведомления сдвинуты относительно start_frame
     for ev in log.events:
         if ev.track_id == 1:
             assert ev.notified
     with tempfile.TemporaryDirectory() as td:
         nt_path, ev_path = _write_csvs_for_log(log, td)
         preds = _load_predicted_from_paths(nt_path, ev_path)
-    # оба события одного track_id должны найтись
     assert len(preds) == 2, f"загрузчик нашёл {len(preds)} из 2"
     assert len({p["event_id"] for p in preds}) == 2
     return {"name": "notification_event_link", "ok": True,
             "preds_loaded": len(preds), "same_track_id": True}
 
 
-# ---------- Проверки назначения событий (не генератора) ----------
+# ---------- Проверки назначения событий ----------
 
 def _pred(pid, tid, s, e):
     return {"row_id": pid, "track_id": tid, "start_frame": s, "end_frame": e}
@@ -373,19 +407,130 @@ def _ref(pid, tid, s, e):
     return {"row_id": pid, "track_id": tid, "start_frame": s, "end_frame": e}
 
 
+def _boxes(frames, box=(0.0, 0.0, 10.0, 10.0)):
+    return {int(f): box for f in frames}
+
+
+def check_spatial_denominator():
+    # Замечание 4: inter = 10 кадров, эталон есть на всех 10, предсказанная
+    # рамка — только на 1 кадре и совпадает. Доля подтверждения = 1/10 < 0.5,
+    # пара НЕ допустима.
+    pred = _pred("p1", 1, 0, 9)
+    ref = _ref("A", 1, 0, 9)
+    pred_boxes = {"p1": _boxes([0])}                 # рамка только на кадре 0
+    ref_boxes = {"A": _boxes(range(0, 10))}          # эталон на всех 10
+    ok, inter, good = pair_admissible(pred, ref,
+                                      pred_boxes.get("p1"),
+                                      ref_boxes.get("A"))
+    assert inter == 10 and good == 1
+    assert not ok, "1/10 не должно подтверждать пару (требуется >= 0.5)"
+    # ровно половина подтверждена — пара допустима
+    pred_boxes_half = {"p1": _boxes(range(0, 5))}
+    ok2, _, good2 = pair_admissible(pred, ref,
+                                    pred_boxes_half.get("p1"),
+                                    ref_boxes.get("A"))
+    assert ok2 and good2 == 5, f"5/10 должно подтверждать, получено {good2}/10"
+    return {"name": "spatial_denominator", "ok": True,
+            "one_of_ten_rejected": True, "five_of_ten_accepted": True}
+
+
+def check_duration_priority():
+    # При равенстве числа пар и пространственного подтверждения
+    # предпочтение — паре с меньшей длительностью эталона.
+    pred = _pred("p1", 1, 0, 19)
+    long_ref = _ref("A_long", 1, 0, 39)
+    short_ref = _ref("B_short", 2, 0, 9)
+    pred_boxes = {"p1": _boxes(range(0, 20))}
+    ref_boxes = {
+        "A_long": _boxes(range(0, 20)),
+        "B_short": _boxes(range(0, 10)),
+    }
+    # Пространственное подтверждение по short_ref ограничено 10 кадрами,
+    # по long_ref — 20. Чтобы сравнить именно приоритет длительности,
+    # сделаем spatial равным: обе рамки эталона на кадрах 0..9.
+    ref_boxes = {
+        "A_long": _boxes(range(0, 10)),
+        "B_short": _boxes(range(0, 10)),
+    }
+    cls = classify([pred], [long_ref, short_ref],
+                   pred_boxes=pred_boxes, ref_boxes=ref_boxes)
+    assert len(cls["tp"]) == 1
+    chosen = cls["tp"][0]["ref"]["row_id"]
+    assert chosen == "B_short", f"приоритет длительности: выбрано {chosen}"
+    return {"name": "duration_priority", "ok": True, "chosen": chosen}
+
+
+def check_tie_by_row_id():
+    # Два одинаковых предсказания, один эталон: TP должен выбираться
+    # стабильно по row_id при перестановке предсказаний.
+    p1 = _pred("pred_a", 7, 0, 9)
+    p2 = _pred("pred_b", 7, 0, 9)
+    ref = _ref("A", 1, 0, 9)
+    pred_boxes = {"pred_a": _boxes(range(0, 10)),
+                  "pred_b": _boxes(range(0, 10))}
+    ref_boxes = {"A": _boxes(range(0, 10))}
+    cls1 = classify([p1, p2], [ref], pred_boxes, ref_boxes)
+    cls2 = classify([p2, p1], [ref], pred_boxes, ref_boxes)
+    tp1 = cls1["tp"][0]["pred"]["row_id"]
+    tp2 = cls2["tp"][0]["pred"]["row_id"]
+    # при одинаковых интервалах выбирается лексикографически меньший row_id
+    assert tp1 == tp2 == "pred_a", (tp1, tp2)
+    return {"name": "tie_by_row_id", "ok": True, "tp_row_id": tp1}
+
+
 def check_competing_assignment():
-    # первое предсказание допустимо к A и B, второе только к A;
-    # корректно: P1->B, P2->A => TP=2, FP=0, FN=0.
-    preds = [_pred("p1", 10, 0, 20), _pred("p2", 20, 0, 20)]
-    refs = [_ref("A", 1, 0, 20), _ref("B", 2, 0, 20)]
-    cls = classify(preds, refs)
-    ok = len(cls["tp"]) == 2 and cls["fp"] == [] and cls["fn"] == []
-    assert ok, f"competing: {cls}"
-    # перестановка предсказаний не меняет результат
-    preds2 = [_pred("p2", 20, 0, 20), _pred("p1", 10, 0, 20)]
-    cls2 = classify(preds2, refs)
-    assert len(cls2["tp"]) == 2 and cls2["fp"] == [] and cls2["fn"] == []
-    return {"name": "competing_assignment", "ok": True}
+    # Замечание 4: реально создать случай «первое -> A и B, второе -> только A».
+    # Через пространственные рамки: p1 совпадает с рамками A и B,
+    # p2 — только с A.
+    p1 = _pred("p1", 10, 0, 9)
+    p2 = _pred("p2", 20, 0, 9)
+    A = _ref("A", 1, 0, 9)
+    B = _ref("B", 2, 0, 9)
+    pred_boxes = {
+        "p1": _boxes(range(0, 10)),
+        "p2": _boxes(range(0, 10)),
+    }
+    ref_boxes = {
+        "A": _boxes(range(0, 10)),          # p1 и p2 совпадают с A
+        "B": {f: (100.0, 100.0, 110.0, 110.0) for f in range(0, 10)},
+    }
+    # p1 получает "смешанные" рамки: совпадает и с A, и с B нельзя одной
+    # рамкой, поэтому сделаем p1 совместимым с B через пересечение по
+    # половине кадров (IoU>=0.5 на 5 из 10), а с A — на всех 10.
+    pred_boxes["p1"] = {**{f: (0.0, 0.0, 10.0, 10.0) for f in range(0, 10)}}
+    # чтобы p1 был допустим к B (5/10), зададим B-рамку совпадающей
+    # на кадрах 0..4 и далёкой на 5..9
+    ref_boxes["B"] = {}
+    for f in range(0, 10):
+        ref_boxes["B"][f] = ((0.0, 0.0, 10.0, 10.0) if f < 5
+                             else (100.0, 100.0, 110.0, 110.0))
+    # p2 к B недопустим: его рамка совпадает с A, а с B — нет.
+    pred_boxes["p2"] = {f: (100.0, 100.0, 110.0, 110.0)
+                        for f in range(0, 10)}
+    # p2 совпадает с B на всех кадрах, но не с A -> нужно наоборот:
+    # вернём p2 к A и разведём с B
+    pred_boxes["p2"] = {f: (0.0, 0.0, 10.0, 10.0) for f in range(0, 10)}
+    # тогда p2 допустим и к A, и к B — это не заявленный случай.
+    # Сделаем B далёким от обеих рамок p1/p2 нельзя при p1 допустимом к B.
+    # Итог: корректная постановка — p1 допустим к A и B (5/10 к B),
+    # p2 — только к A (0/10 к B). Зададим p2 рамку, не совпадающую с B.
+    pred_boxes["p2"] = {f: (0.0, 0.0, 10.0, 10.0) for f in range(0, 10)}
+    ref_boxes["B"] = {f: ((100.0, 100.0, 110.0, 110.0) if f < 5
+                          else (0.0, 0.0, 10.0, 10.0))
+                      for f in range(0, 10)}
+    # Проверим допустимость явно
+    ok_p1_A = pair_admissible(p1, A, pred_boxes["p1"], ref_boxes["A"])[0]
+    ok_p1_B = pair_admissible(p1, B, pred_boxes["p1"], ref_boxes["B"])[0]
+    ok_p2_A = pair_admissible(p2, A, pred_boxes["p2"], ref_boxes["A"])[0]
+    ok_p2_B = pair_admissible(p2, B, pred_boxes["p2"], ref_boxes["B"])[0]
+    assert ok_p1_A and ok_p1_B, (ok_p1_A, ok_p1_B)
+    assert ok_p2_A and not ok_p2_B, (ok_p2_A, ok_p2_B)
+    cls = classify([p1, p2], [A, B], pred_boxes, ref_boxes)
+    # корректно: P2->A, P1->B => TP=2, FP=0, FN=0
+    assigned = {(t["pred"]["row_id"], t["ref"]["row_id"]) for t in cls["tp"]}
+    assert assigned == {("p2", "A"), ("p1", "B")}, assigned
+    assert cls["fp"] == [] and cls["fn"] == []
+    return {"name": "competing_assignment", "ok": True, "assigned": sorted(assigned)}
 
 
 def check_identical_duplicates():
@@ -546,13 +691,9 @@ def _evaluate_tag(tag):
     preds, pred_boxes = load_predicted(tag)
     refs, ref_boxes = _ref_rows_and_boxes()
 
-    # Диагностический режим: хотя бы у одного эталона нет рамок ->
-    # пространственная проверка для него не выполняется.
     has_boxes = [rid for rid, b in ref_boxes.items() if b]
     spatial_skipped = len(has_boxes) < len(ref_boxes)
 
-    # Для ref без рамок pair_admissible пропускает пространственный шаг,
-    # для ref с рамками — требует перекрытия рамок предсказания и эталона.
     cls = classify(preds, refs, pred_boxes=pred_boxes, ref_boxes=ref_boxes)
     metrics = _metrics(cls, len(preds), len(refs))
     metrics.update({
@@ -572,7 +713,6 @@ def evaluate_on_reference():
     per_tag = {}
     for tag in P.RUNS:
         per_tag[tag] = _evaluate_tag(tag)
-    # сводка: эталон один и тот же, оценки — по каждой выгрузке
     return {
         "reference_events": len(P.REFERENCE_EVENTS),
         "per_run": per_tag,
@@ -588,9 +728,11 @@ def run_checks():
                check_boundary_plus_minus_one, check_track_gap,
                check_no_duplicate_notification, check_two_events_same_person,
                check_notification_event_link,
-               check_competing_assignment, check_identical_duplicates,
-               check_short_overlap, check_unmatched_notification,
-               check_duration_filter, _check_example_runs):
+               check_spatial_denominator, check_duration_priority,
+               check_tie_by_row_id, check_competing_assignment,
+               check_identical_duplicates, check_short_overlap,
+               check_unmatched_notification, check_duration_filter,
+               _check_example_runs):
         try:
             results.append(fn())
         except AssertionError as e:
@@ -621,7 +763,6 @@ def main():
     with open(P.REPORT_JSON, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
-    # Отдельные отчёты по каждой выгрузке (если эталон задан)
     if P.REFERENCE_EVENTS:
         per_tag = report["reference"].get("per_run", {})
         for tag, metrics in per_tag.items():
