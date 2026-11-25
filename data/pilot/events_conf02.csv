@@ -1,7 +1,7 @@
-track_id,start_frame,end_frame,duration,close_reason
-4,8,36,27,track_lost
-5,51,92,42,track_lost
-6,114,114,1,track_lost
-8,131,145,14,track_lost
-7,131,164,26,track_lost
-7,178,195,7,end_of_video
+event_id,track_id,start_frame,end_frame,duration,close_reason
+1,4,8,36,27,track_lost
+2,5,51,92,42,track_lost
+3,6,114,114,1,track_lost
+5,8,131,145,14,track_lost
+4,7,131,164,26,track_lost
+6,7,178,195,7,end_of_video
