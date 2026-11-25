@@ -77,9 +77,18 @@
       "tp_row_id": "pred_a"
     },
     {
-      "name": "check_competing_assignment",
-      "ok": false,
-      "error": "(True, True)"
+      "name": "competing_assignment",
+      "ok": true,
+      "assigned": [
+        [
+          "p1",
+          "B"
+        ],
+        [
+          "p2",
+          "A"
+        ]
+      ]
     },
     {
       "name": "identical_duplicates",
@@ -101,9 +110,15 @@
       "filtered_out": 1
     },
     {
-      "name": "_check_example_runs",
-      "ok": false,
-      "error": "-0.25"
+      "name": "stats_bootstrap_example",
+      "ok": true,
+      "n_blocks_used": null,
+      "conditional": true,
+      "details": [
+        "ratio_of_sums_example",
+        "conditional_achievable",
+        "mixed_empty_nonempty"
+      ]
     }
   ],
   "reference": {
