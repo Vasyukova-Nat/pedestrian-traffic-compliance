@@ -9,6 +9,7 @@ mmsegmentation/mmseg/
 !data/captured/selenium_video_11.mp4
 !data/captured/selenium_video_15.mp4
 !data/pilot/pilot_annotated*.mp4
+!data/pilot/reference_preview.mp4
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
