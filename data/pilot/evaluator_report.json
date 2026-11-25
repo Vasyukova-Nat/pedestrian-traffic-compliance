@@ -55,8 +55,31 @@
       "events": 2
     },
     {
-      "name": "competing_assignment",
-      "ok": true
+      "name": "notification_event_link",
+      "ok": true,
+      "preds_loaded": 2,
+      "same_track_id": true
+    },
+    {
+      "name": "spatial_denominator",
+      "ok": true,
+      "one_of_ten_rejected": true,
+      "five_of_ten_accepted": true
+    },
+    {
+      "name": "duration_priority",
+      "ok": true,
+      "chosen": "B_short"
+    },
+    {
+      "name": "tie_by_row_id",
+      "ok": true,
+      "tp_row_id": "pred_a"
+    },
+    {
+      "name": "check_competing_assignment",
+      "ok": false,
+      "error": "(True, True)"
     },
     {
       "name": "identical_duplicates",
@@ -78,10 +101,9 @@
       "filtered_out": 1
     },
     {
-      "name": "stats_bootstrap_example",
-      "ok": true,
-      "n_blocks_used": 2,
-      "conditional": false
+      "name": "_check_example_runs",
+      "ok": false,
+      "error": "-0.25"
     }
   ],
   "reference": {
